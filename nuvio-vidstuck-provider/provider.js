@@ -1,12 +1,28 @@
-// provider.js — Nuvio Vidstuck Provider
-// Compatible sa Nuvio 0.5.x+ format
-// Hermes-compatible: walang async/await, arrow functions, o const/let
+// provider.js — Nuvio Vidstuck Provider (Stremio Addon Format)
+// Compatible sa Nuvio Mobile 0.5.x+
 
-// ===== PRIMARY ENDPOINTS (Vidstuck) =====
+var http = require('http');
+
+// ===== MANIFEST =====
+var manifest = {
+  id: 'nuvio.vidstuck',
+  version: '1.0.0',
+  name: 'Vidstuck Provider',
+  description: 'Streams movies and TV shows from Vidstuck embed source.',
+  logo: 'https://cdn-icons-png.flaticon.com/512/2503/2503508.png',
+  resources: ['stream'],
+  types: ['movie', 'series'],
+  idPrefixes: ['tt', 'tmdb:'],
+  catalogs: [],
+  behaviorHints: {
+    configurable: false
+  }
+};
+
+// ===== ENDPOINTS =====
 var VIDSTUCK_MOVIE = 'https://embed.vidstuck.xyz/embed/movie/';
 var VIDSTUCK_TV = 'https://embed.vidstuck.xyz/embed/tv/';
 
-// ===== FALLBACK ENDPOINTS (kung mag-fail ang Vidstuck) =====
 var MOVIE_FALLBACKS = [
   { name: 'Vidstuck', url: VIDSTUCK_MOVIE },
   { name: 'Zxcstream', url: 'https://zxcstream.icu/watch/movie/' },
@@ -21,37 +37,32 @@ var TV_FALLBACKS = [
   { name: 'VidSrc.me', url: 'https://vidsrc.me/embed/tv/' }
 ];
 
+// ===== HELPERS =====
 function buildMovieUrl(endpoint, tmdbId) {
-  // Vidstuck: https://embed.vidstuck.xyz/embed/movie/{tmdbId}
   return endpoint + tmdbId;
 }
 
 function buildTvUrl(endpoint, tmdbId, season, episode) {
-  // Vidstuck: https://embed.vidstuck.xyz/embed/tv/{tmdbId}/{season}/{episode}
   return endpoint + tmdbId + '/' + season + '/' + episode;
 }
 
-function getStreams(params) {
-  var tmdbId = params.tmdbId;
-  var mediaType = params.mediaType;
-  var season = params.season || 1;
-  var episode = params.episode || 1;
+// ===== STREAM HANDLER =====
+function getStreams(type, id) {
   var streams = [];
-  var i;
+  var tmdbId = id.replace('tmdb:', '').replace('tt', ''); // Basic ID cleaning
+  var season = 1;
+  var episode = 1;
 
-  if (mediaType === 'movie') {
-    // Primary: Vidstuck
-    streams.push({
-      name: 'Vidstuck',
-      title: 'Vidstuck — HD',
-      url: buildMovieUrl(VIDSTUCK_MOVIE, tmdbId),
-      quality: 'HD',
-      type: 'iframe',
-      provider: 'Vidstuck'
-    });
+  // Check if may season/episode sa ID (format: tt1234:1:1)
+  if (id.indexOf(':') !== -1) {
+    var parts = id.split(':');
+    tmdbId = parts[0].replace('tmdb:', '').replace('tt', '');
+    season = parts[1] || 1;
+    episode = parts[2] || 1;
+  }
 
-    // Fallbacks (para may backup kung hindi gumana ang Vidstuck)
-    for (i = 1; i < MOVIE_FALLBACKS.length; i++) {
+  if (type === 'movie') {
+    for (var i = 0; i < MOVIE_FALLBACKS.length; i++) {
       var m = MOVIE_FALLBACKS[i];
       streams.push({
         name: m.name,
@@ -62,20 +73,9 @@ function getStreams(params) {
         provider: m.name
       });
     }
-  } else if (mediaType === 'tv') {
-    // Primary: Vidstuck
-    streams.push({
-      name: 'Vidstuck',
-      title: 'Vidstuck — HD',
-      url: buildTvUrl(VIDSTUCK_TV, tmdbId, season, episode),
-      quality: 'HD',
-      type: 'iframe',
-      provider: 'Vidstuck'
-    });
-
-    // Fallbacks
-    for (i = 1; i < TV_FALLBACKS.length; i++) {
-      var t = TV_FALLBACKS[i];
+  } else if (type === 'series') {
+    for (var j = 0; j < TV_FALLBACKS.length; j++) {
+      var t = TV_FALLBACKS[j];
       streams.push({
         name: t.name,
         title: t.name + ' — HD',
@@ -90,6 +90,25 @@ function getStreams(params) {
   return streams;
 }
 
+// ===== ROUTER (Standard Stremio Addon SDK format) =====
+function getRouter() {
+  return function (args) {
+    // args: { type, id, resource, ... }
+    var resource = args.resource;
+    var type = args.type;
+    var id = args.id;
+
+    if (resource === 'stream') {
+      var streams = getStreams(type, id);
+      return Promise.resolve({ streams: streams });
+    }
+
+    return Promise.resolve({});
+  };
+}
+
+// ===== EXPORTS (Ito ang hinahanap ng Nuvio) =====
 module.exports = {
-  getStreams: getStreams
+  manifest: manifest,
+  getRouter: getRouter
 };
