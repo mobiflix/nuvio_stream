@@ -1,1 +1,19 @@
-
+{
+  "id": "nuvio.vidstuck",
+  "name": "Vidstuck Provider",
+  "version": "1.0.0",
+  "description": "Streams movies and TV shows from Vidstuck embed source.",
+  "author": "MobiFlix",
+  "icon": "https://cdn-icons-png.flaticon.com/512/2503/2503508.png",
+  "repository": "https://github.com/mobiflix/nuvio-vidstuck-provider",
+  "providers": [
+    {
+      "id": "vidstuck",
+      "name": "Vidstuck",
+      "entry": "provider.js",
+      "contentTypes": ["movie", "tv"],
+      "languages": ["en"],
+      "quality": ["HD"]
+    }
+  ]
+}
