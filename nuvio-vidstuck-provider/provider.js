@@ -1,12 +1,9 @@
-// provider.js — Nuvio Vidstuck Provider (Stremio Addon Format)
-// May IMDb to TMDB converter para gumana ang Vidstuck
-
+// provider.js — Nuvio Vidstuck Provider with Extractor
 var https = require('https');
 
-// ===== MANIFEST =====
 var manifest = {
   id: 'nuvio.vidstuck',
-  version: '1.0.1',
+  version: '1.0.2',
   name: 'Vidstuck Provider',
   description: 'Streams movies and TV shows from Vidstuck embed source.',
   logo: 'https://cdn-icons-png.flaticon.com/512/2503/2503508.png',
@@ -14,49 +11,71 @@ var manifest = {
   types: ['movie', 'series'],
   idPrefixes: ['tt', 'tmdb:'],
   catalogs: [],
-  behaviorHints: {
-    configurable: false
-  }
+  behaviorHints: { configurable: false }
 };
 
-// ===== ENDPOINTS =====
 var VIDSTUCK_MOVIE = 'https://embed.vidstuck.xyz/embed/movie/';
 var VIDSTUCK_TV = 'https://embed.vidstuck.xyz/embed/tv/';
 
-// ===== HELPER: Fetch TMDB ID from IMDb ID using Cinemeta =====
+// ===== Fetch HTML from URL =====
+function fetchHtml(url, callback) {
+  https.get(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+  }, function(res) {
+    var data = '';
+    res.on('data', function(chunk) { data += chunk; });
+    res.on('end', function() { callback(data); });
+  }).on('error', function() { callback(null); });
+}
+
+// ===== Get TMDB ID from IMDb =====
 function getTmdbId(imdbId, type, callback) {
-  // Kung TMDB ID na agad, ibalik na lang
   if (imdbId.indexOf('tmdb:') === 0) {
     callback(imdbId.replace('tmdb:', ''));
     return;
   }
-
-  // Kung IMDb ID, i-convert gamit ang Cinemeta API
   var url = 'https://v3-cinemeta.strem.io/meta/' + type + '/' + imdbId + '.json';
-  
   https.get(url, function(res) {
     var data = '';
     res.on('data', function(chunk) { data += chunk; });
     res.on('end', function() {
       try {
         var json = JSON.parse(data);
-        // Ang Cinemeta ay may "moviedb_id" o "tmdb_id" sa meta
-        var tmdbId = json.meta.moviedb_id || json.meta.tmdb_id || null;
-        callback(tmdbId);
-      } catch (e) {
-        callback(null);
-      }
+        callback(json.meta.moviedb_id || json.meta.tmdb_id || null);
+      } catch (e) { callback(null); }
     });
-  }).on('error', function() {
-    callback(null);
-  });
+  }).on('error', function() { callback(null); });
 }
 
-// ===== STREAM HANDLER =====
+// ===== Extract .m3u8 or .mp4 from HTML =====
+function extractVideoUrl(html) {
+  if (!html) return null;
+
+  // Pattern 1: <source src="...m3u8">
+  var match = html.match(/<source[^>]+src=["']([^"']+\.(m3u8|mp4)[^"']*)["']/i);
+  if (match) return match[1];
+
+  // Pattern 2: file: "...m3u8" or "file":"..."
+  match = html.match(/["']file["']\s*:\s*["']([^"']+\.(m3u8|mp4)[^"']*)["']/i);
+  if (match) return match[1];
+
+  // Pattern 3: https://...m3u8 (generic)
+  match = html.match(/(https?:\/\/[^\s"']+\.m3u8[^\s"']*)/i);
+  if (match) return match[1];
+
+  // Pattern 4: https://...mp4
+  match = html.match(/(https?:\/\/[^\s"']+\.mp4[^\s"']*)/i);
+  if (match) return match[1];
+
+  return null;
+}
+
+// ===== Get Streams =====
 function getStreams(type, id, callback) {
-  var imdbId = id.split(':')[0]; // Kunin lang yung IMDb ID part
-  var season = 1;
-  var episode = 1;
+  var imdbId = id.split(':')[0];
+  var season = 1, episode = 1;
 
   if (id.indexOf(':') !== -1) {
     var parts = id.split(':');
@@ -65,62 +84,56 @@ function getStreams(type, id, callback) {
     episode = parts[2] || 1;
   }
 
-  // I-convert ang IMDb ID sa TMDB ID
   var contentType = (type === 'movie') ? 'movie' : 'series';
-  
+
   getTmdbId(imdbId, contentType, function(tmdbId) {
     if (!tmdbId) {
-      // Kung walang TMDB ID, ibalik ang empty streams
       callback({ streams: [] });
       return;
     }
 
-    var streams = [];
-
+    var embedUrl;
     if (type === 'movie') {
-      streams.push({
-        name: 'Vidstuck',
-        title: 'Vidstuck — HD',
-        url: VIDSTUCK_MOVIE + tmdbId,
-        quality: 'HD',
-        type: 'iframe',
-        provider: 'Vidstuck'
-      });
-    } else if (type === 'series') {
-      streams.push({
-        name: 'Vidstuck',
-        title: 'Vidstuck — HD',
-        url: VIDSTUCK_TV + tmdbId + '/' + season + '/' + episode,
-        quality: 'HD',
-        type: 'iframe',
-        provider: 'Vidstuck'
-      });
+      embedUrl = VIDSTUCK_MOVIE + tmdbId;
+    } else {
+      embedUrl = VIDSTUCK_TV + tmdbId + '/' + season + '/' + episode;
     }
 
-    callback({ streams: streams });
+    // Fetch embed page and extract direct video URL
+    fetchHtml(embedUrl, function(html) {
+      var videoUrl = extractVideoUrl(html);
+
+      if (videoUrl) {
+        callback({
+          streams: [{
+            name: 'Vidstuck',
+            title: 'Vidstuck — HD',
+            url: videoUrl,
+            quality: 'HD',
+            type: 'video'
+          }]
+        });
+      } else {
+        // Fallback: ibalik ang embed URL pero may note
+        callback({ streams: [] });
+      }
+    });
   });
 }
 
-// ===== ROUTER =====
 function getRouter() {
-  return function (args) {
-    var resource = args.resource;
-    var type = args.type;
-    var id = args.id;
-
-    if (resource === 'stream') {
+  return function(args) {
+    if (args.resource === 'stream') {
       return new Promise(function(resolve) {
-        getStreams(type, id, function(result) {
+        getStreams(args.type, args.id, function(result) {
           resolve(result);
         });
       });
     }
-
     return Promise.resolve({});
   };
 }
 
-// ===== EXPORTS =====
 module.exports = {
   manifest: manifest,
   getRouter: getRouter
